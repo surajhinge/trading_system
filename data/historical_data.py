@@ -1,40 +1,36 @@
 """
-Fetches daily historical candles from Upstox and converts them into
-the Candle shape core.level_engine expects. Kept separate from
-watchlist.py (live LTP) since historical vs live are different concerns
-even though they hit the same broker.
+Fetches historical candles from Upstox at any timeframe (days, hours, minutes)
+and converts them into the Candle shape used everywhere else in the system.
 """
 
 import requests
 from datetime import date, timedelta
 from core.level_engine import Candle
 
-HISTORICAL_URL = "https://api.upstox.com/v3/historical-candle/{key}/days/1/{to_date}/{from_date}"
+HISTORICAL_URL = "https://api.upstox.com/v3/historical-candle/{key}/{unit}/{interval}/{to_date}/{from_date}"
 
 
-def fetch_daily_candles(access_token: str, instrument_key: str, lookback_days: int = 10) -> list[Candle]:
+def fetch_candles(access_token: str, instrument_key: str, unit: str = "days", interval: str = "1", lookback_days: int = 10) -> list[Candle]:
     """
-    Fetch the last `lookback_days` of daily candles for one instrument.
-    Returns oldest -> newest, matching what level_engine.compute_levels expects.
+    unit: "days", "hours", or "minutes" (per Upstox V3 API)
+    interval: the number within that unit, e.g. unit="hours", interval="1" -> 1H candles
     """
     to_date = date.today().isoformat()
     from_date = (date.today() - timedelta(days=lookback_days)).isoformat()
 
-    url = HISTORICAL_URL.format(key=instrument_key, to_date=to_date, from_date=from_date)
+    url = HISTORICAL_URL.format(key=instrument_key, unit=unit, interval=interval, to_date=to_date, from_date=from_date)
     headers = {"Accept": "application/json", "Authorization": f"Bearer {access_token}"}
 
     resp = requests.get(url, headers=headers, timeout=5)
     resp.raise_for_status()
     raw_candles = resp.json()["data"]["candles"]
+    raw_candles.reverse()  # Upstox returns newest-first; we want oldest-first
 
-    # Upstox returns newest-first: each row is [timestamp, open, high, low, close, volume, oi]
-    # Reverse so the LAST element is the most recent completed day, as level_engine expects.
-    raw_candles.reverse()
+    return [Candle(high=row[2], low=row[3], close=row[4]) for row in raw_candles]
 
-    return [
-        Candle(high=row[2], low=row[3], close=row[4])
-        for row in raw_candles
-    ]
+
+def fetch_daily_candles(access_token: str, instrument_key: str, lookback_days: int = 10) -> list[Candle]:
+    return fetch_candles(access_token, instrument_key, unit="days", interval="1", lookback_days=lookback_days)
 
 
 if __name__ == "__main__":
