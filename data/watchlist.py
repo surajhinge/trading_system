@@ -5,8 +5,6 @@ No trading logic here. Just: can we get a reliable price for a symbol, on demand
 
 import requests
 
-# Upstox uses instrument keys, not plain tickers — this is the NSE_EQ format.
-# For now hardcode 2-3 symbols; we'll load this from a config file later.
 WATCHLIST = {
     "RELIANCE": "NSE_EQ|INE002A01018",
     "TCS": "NSE_EQ|INE467B01029",
@@ -25,7 +23,6 @@ def get_ltp(access_token: str, instrument_key: str) -> float:
     resp = requests.get(UPSTOX_QUOTE_URL, headers=headers, params=params, timeout=5)
     resp.raise_for_status()
     data = resp.json()["data"]
-    # response is keyed by a slightly different symbol format — grab the first (only) entry
     quote = next(iter(data.values()))
     return quote["last_price"]
 
@@ -49,4 +46,4 @@ if __name__ == "__main__":
 
     prices = refresh_watchlist(token)
     for sym, price in prices.items():
-        print(f"{sym}: ₹{price}")
+        print(f"{sym}: Rs.{price}")
