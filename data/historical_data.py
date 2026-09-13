@@ -1,50 +1,71 @@
-"""
-Fetches historical candles from Upstox at any timeframe (days, hours, minutes)
-and converts them into the Candle shape used everywhere else in the system.
-"""
+"""Upstox historical OHLCV data layer for Daily, 1H and 15M candles."""
 
+from datetime import date, timedelta, datetime
 import requests
-from datetime import date, timedelta
+
 from core.level_engine import Candle
 
 HISTORICAL_URL = "https://api.upstox.com/v3/historical-candle/{key}/{unit}/{interval}/{to_date}/{from_date}"
 
 
-def fetch_candles(access_token: str, instrument_key: str, unit: str = "days", interval: str = "1", lookback_days: int = 10) -> list[Candle]:
-    """
-    unit: "days", "hours", or "minutes" (per Upstox V3 API)
-    interval: the number within that unit, e.g. unit="hours", interval="1" -> 1H candles
-    """
-    to_date = date.today().isoformat()
-    from_date = (date.today() - timedelta(days=lookback_days)).isoformat()
+def fetch_candles(access_token: str, instrument_key: str, unit: str = "days", interval: str = "1", lookback_days: int = 30) -> list[Candle]:
+    if not access_token:
+        raise ValueError("Upstox access token is required")
+    if not instrument_key:
+        raise ValueError("instrument_key is required")
+    if lookback_days <= 0:
+        raise ValueError("lookback_days must be greater than zero")
 
-    url = HISTORICAL_URL.format(key=instrument_key, unit=unit, interval=interval, to_date=to_date, from_date=from_date)
+    to_date = date.today()
+    from_date = to_date - timedelta(days=lookback_days)
+    url = HISTORICAL_URL.format(
+        key=instrument_key,
+        unit=unit,
+        interval=interval,
+        to_date=to_date.isoformat(),
+        from_date=from_date.isoformat(),
+    )
     headers = {"Accept": "application/json", "Authorization": f"Bearer {access_token}"}
+    response = requests.get(url, headers=headers, timeout=10)
+    response.raise_for_status()
 
-    resp = requests.get(url, headers=headers, timeout=5)
-    resp.raise_for_status()
-    raw_candles = resp.json()["data"]["candles"]
-    raw_candles.reverse()  # Upstox returns newest-first; we want oldest-first
+    raw_candles = response.json().get("data", {}).get("candles", [])
+    if not raw_candles:
+        raise ValueError(f"No historical candles returned for {instrument_key} {unit} {interval}")
 
-    return [Candle(high=row[2], low=row[3], close=row[4]) for row in raw_candles]
+    raw_candles.reverse()
+    candles = []
+
+    for row in raw_candles:
+        if len(row) < 6:
+            raise ValueError("Unexpected Upstox candle format")
+
+        timestamp = None
+        if row[0]:
+            try:
+                timestamp = datetime.fromisoformat(str(row[0]).replace("Z", "+00:00"))
+            except ValueError:
+                pass
+
+        candles.append(Candle(
+            open=float(row[1]),
+            high=float(row[2]),
+            low=float(row[3]),
+            close=float(row[4]),
+            volume=float(row[5]),
+            timestamp=timestamp,
+        ))
+
+    return candles
 
 
-def fetch_daily_candles(access_token: str, instrument_key: str, lookback_days: int = 10) -> list[Candle]:
-    return fetch_candles(access_token, instrument_key, unit="days", interval="1", lookback_days=lookback_days)
+def fetch_daily_candles(access_token: str, instrument_key: str, lookback_days: int = 120) -> list[Candle]:
+    return fetch_candles(access_token, instrument_key, "days", "1", lookback_days)
 
 
-if __name__ == "__main__":
-    import os
-    from dotenv import load_dotenv
-    from core.level_engine import compute_levels
+def fetch_hourly_candles(access_token: str, instrument_key: str, lookback_days: int = 30) -> list[Candle]:
+    return fetch_candles(access_token, instrument_key, "hours", "1", lookback_days)
 
-    load_dotenv()
-    token = os.getenv("UPSTOX_ACCESS_TOKEN")
-    if not token:
-        raise SystemExit("Set UPSTOX_ACCESS_TOKEN in your .env file first.")
 
-    candles = fetch_daily_candles(token, "NSE_EQ|INE002A01018")  # RELIANCE
-    levels = compute_levels(candles)
-    print(f"Prev High: ₹{levels.prev_high}")
-    print(f"Prev Low:  ₹{levels.prev_low}")
-    print(f"Prev Close: ₹{levels.prev_close}")
+def fetch_fifteen_minute_candles(access_token: str, instrument_key: str, lookback_days: int = 10) -> list[Candle]:
+    return fetch_candles(access_token, instrument_key, "minutes", "15", lookback_days)
